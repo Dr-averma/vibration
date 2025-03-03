@@ -1,0 +1,168 @@
+using Plots, Printf
+using Plots.PlotMeasures
+gr()  
+default(fontfamily="times")
+
+# System Parameters
+m = 6.0       # Mass (kg)
+k = 25.0      # Stiffness (N/m)
+ξ = 0.05      # Damping ratio
+td = 4.0      # Duration of impulse (s)
+a = 200       # Force amplitude (N)
+N = 2         # Number of Fourier terms
+
+# Initial Conditions
+u0 = 1.0      # Initial displacement (m)
+v0 = 2.0      # Initial velocity (m/s)
+
+t = 0:0.01:40  # Time range
+
+# Impulse function
+function impulse(t)
+    return t <= td ? a * sin(π * t / td) : 0.0                         
+end
+
+cycle = 0.5  # 0.5 for Half and 1 for full
+
+# Compute Fourier coefficients
+function calculate_fourier_coefficients(func, N, td)
+    ω1 = π / td
+    dt = 0.001  
+    t_integration = 0:dt:td
+    
+    a0 = (2*cycle/td) * sum(func(t) for t in t_integration) * dt
+    an = zeros(N)
+    bn = zeros(N)
+    
+    for n in 1:N
+        an[n] = (2*cycle/td) * sum(func(t) * cos(n * ω1 * t) for t in t_integration) * dt
+        bn[n] = (2*cycle/td) * sum(func(t) * sin(n * ω1 * t) for t in t_integration) * dt
+    end
+    
+    return a0, an, bn
+end
+
+# Compute Fourier series approximation
+function fourier_approximation(t, a0, an, bn)
+    ω1 = π / td
+    return a0/2 + sum(an[n] * cos(n * ω1 * t) + bn[n] * sin(n * ω1 * t) for n in 1:length(an))
+end
+
+# Compute Fourier coefficients
+a0, an, bn = calculate_fourier_coefficients(impulse, N, td)
+
+# Derived system parameters
+ωn = sqrt(k/m)        # Natural frequency
+ωd = ωn * sqrt(1 - ξ^2)  # Damped natural frequency
+
+# Print system parameters
+println("\nSystem Parameters:")
+@printf("Mass (m) = %.2f kg\n", m)
+@printf("Stiffness (k) = %.2f N/m\n", k)
+@printf("Damping Ratio (ξ) = %.4f\n", ξ)
+@printf("Natural Frequency (ωn) = %.4f rad/s\n", ωn)
+@printf("Damped Natural Frequency (ωd) = %.4f rad/s\n", ωd)
+@printf("\n")
+# Print Fourier coefficients
+println("Fourier Coefficients:")
+@printf("a0 = %.4f\n", a0)
+for n in 1:N
+    @printf("a[%d] = %.4f, b[%d] = %.4f\n", n, an[n], n, bn[n])
+end
+# Compute forced response
+function forced_response(t, an, bn)
+    ω1 = π / td
+    response = 0.0
+    for n in 1:length(an)
+        β = n * ω1 / ωn
+        H = 1 / sqrt((1 - β^2)^2 + (2ξ*β)^2)
+        ϕ = atan(2ξ*β / (1 - β^2))
+        response += an[n] * H * cos(n*ω1*t - ϕ) + bn[n] * H * sin(n*ω1*t - ϕ)
+    end
+    return response
+end
+C = sqrt(u0^2 + (((ξ * ωn * u0) + v0) / ωd)^2)
+ϕ_f = atan(((ξ * ωn * u0) + v0) / (ωd * u0))
+println("*****************")
+@printf("C = %.4f\n", C)
+@printf("ϕ_f = %.4f\n", ϕ_f)
+# Compute free vibration response
+function free_vibration(t, u0, v0)
+    C = sqrt(u0^2 + (((ξ * ωn * u0) + v0) / ωd)^2)
+    ϕ_f = atan(((ξ * ωn * u0) + v0) / (ωd * u0))
+    return C * exp(-ξ * ωn * t) * cos(ωd * t - ϕ_f)
+end
+
+# Compute displacement and velocity
+u = zeros(length(t))
+v = zeros(length(t))
+u_f = zeros(length(t))
+u_t = zeros(length(t))
+counter_td = 0
+
+for i in eachindex(t)
+    if t[i] <= td
+        u[i] = forced_response(t[i], an, bn) + free_vibration(t[i], u0, v0)
+        u_f[i] = free_vibration(t[i], u0, v0)
+        v[i] = (forced_response(t[i] + 0.001, an, bn) - forced_response(t[i], an, bn)) / 0.001 + 
+               (free_vibration(t[i] + 0.001, u0, v0) - free_vibration(t[i], u0, v0)) / 0.001
+        if t[i] == td
+            counter_td = i
+        end
+    else
+        u_td = u[counter_td]
+        v_td = v[counter_td]
+
+        u[i] = free_vibration(t[i] - td, u_td, v_td)
+        u_t[i] = free_vibration(t[i] - td, u_td, v_td)
+        v[i] = (free_vibration(t[i] - td + 0.001, u_td, v_td) - free_vibration(t[i] - td, u_td, v_td)) / 0.001
+    end
+end
+
+# Print values at impulse duration t_d
+println("\nValues at t_d (4.00 s):")
+@printf("Displacement u(td) = %.4f\n", u[counter_td])
+@printf("Velocity v(td) = %.4f\n", v[counter_td])
+
+# Compute y-values for plotting
+y_original = [impulse(ti) for ti in t]
+y_fourier = [fourier_approximation(ti, a0, an, bn) for ti in t]
+println("Constants:")
+
+# Compute transient and forced responses separately for visualization
+t_f1 = t[t .<= td]
+t_t2 = t[t .>= td]
+y_forced = [forced_response(ti, an, bn) for ti in t_f1]
+y_transient = [u_t[i] for i in counter_td:length(t)]
+u_f = u_f[1:counter_td]
+println("\nTime vs Displacement:")
+for i in 1:length(t)
+    if mod(t[i], 1.0) ≈ 0  # Check if t[i] is approximately an integer (each second)
+        @printf("t = %.0f s, u = %.4f\n", t[i], u[i])
+    end
+end
+# Plot Input Function and Fourier Approximation
+p1 = plot(t, y_original, label="Original", title="Impulse",
+          xlabel="Time (s)", ylabel="Amplitude", xticks=0:1:2td, legend=:topright, xlim=(0, 2td))  
+plot!(p1, t, y_fourier, label="Fourier Approximation")
+
+# Plot Displacement and Velocity
+p2 = plot(t, u, label="Displacement", title="SDOF System Response",
+    xlabel="Time (s)", ylabel="Displacement (m)", xticks=0:10:t[end], xlim=(0, t[end]),
+    linewidth=3, linestyle=:dash)
+plot!(p2, t[t .<= td], u_f[1:counter_td], label="Transient Response", linestyle=:dash, linewidth=2)
+plot!(p2, t_f1, y_forced, label="Forced Response", linestyle=:dot, linewidth=2)
+plot!(p2, t_t2, y_transient, label="After Impulse Free Vibration", linestyle=:dot, linewidth=2)
+
+p3 = plot(t, v, label="Velocity", xlabel="Time (s)", ylabel="Velocity (m/s)", 
+    xticks=0:10:t[end], xlim=(0, t[end]))
+
+# Add vertical lines at t_d
+vline!(p1, [td], label="t_d", linestyle=:dash, color=:black, linewidth=1)
+vline!(p2, [td], label="t_d", linestyle=:dash, color=:black, linewidth=1)
+vline!(p3, [td], label="t_d", linestyle=:dash, color=:black, linewidth=1)
+
+# Combine and display plots
+pp = plot(p1, p2, p3, layout=(3,1), size=(720,1080), left_margin=20mm)
+savefig("P3.png")
+display(pp)
